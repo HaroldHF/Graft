@@ -1,0 +1,44 @@
+# Secrets & local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Go build, test, coverage, and workspace artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+go.work
+go.work.sum
+
+# Frontend (React / TypeScript / Vite)
+node_modules/
+dist/
+.vite/
+*.local
+
+# Runtime & sandbox scratch directories
+tmp/
+.graft/
+*.log
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Local AI agent instructions (unversioned)
+AGENTS.md

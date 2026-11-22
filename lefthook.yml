@@ -1,0 +1,63 @@
+# Lefthook configuration for Graft
+# Install locally after `git init`: lefthook install
+# Current phase: Phase 0 (Docs & Technical Spikes) — lightweight secret & commit checks only.
+
+pre-commit:
+  parallel: true
+  fail_fast: false
+  skip:
+    - merge
+    - rebase
+  commands:
+    gitleaks:
+      run: gitleaks protect --staged --redact --no-banner
+
+commit-msg:
+  skip:
+    - merge
+    - rebase
+  commands:
+    conventional-commit:
+      run: |
+        head -n1 "{1}" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|spike)(\([a-z0-9._/-]+\))?!?: .+' || {
+          echo "Error: commit message must follow Conventional Commits: <type>(optional-scope): <description>"
+          echo "Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, spike"
+          exit 1
+        }
+
+# ---------------------------------------------------------------------------
+# Phase 1 (Go Control Plane & Workers) — Uncomment once go.mod & code exist
+# ---------------------------------------------------------------------------
+#     gofmt:
+#       glob: "*.go"
+#       run: gofmt -w {staged_files}
+#       stage_fixed: true
+#
+#     golangci-lint:
+#       glob: "*.go"
+#       run: golangci-lint run --new-from-rev=HEAD
+#
+#     sqlc-vet:
+#       glob: "{*.sql,sqlc.yaml}"
+#       run: sqlc vet
+
+# ---------------------------------------------------------------------------
+# Phase 3 (React + TypeScript Dashboard in web/) — Uncomment when web/ exists
+# ---------------------------------------------------------------------------
+#     web-biome:
+#       root: "web/"
+#       glob: "*.{ts,tsx,js,jsx,json,css}"
+#       run: npx biome check --staged {staged_files}
+
+# pre-push:
+#   parallel: true
+#   skip:
+#     - merge
+#     - rebase
+#   commands:
+#     go-test:
+#       run: go test -short -race ./...
+#
+#     web-typecheck:
+#       root: "web/"
+#       run: npx tsc --noEmit
