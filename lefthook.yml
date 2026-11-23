@@ -19,7 +19,7 @@ commit-msg:
   commands:
     conventional-commit:
       run: >-
-        head -n1 '{1}' | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|spike)(\([a-z0-9._/-]+\))?!?: .+' || (echo 'Error: commit message must follow Conventional Commits: <type>(optional-scope): <description>' && echo 'Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, spike' && exit 1)
+        head -n1 '{1}' | tr -d '\r' | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|spike)(\([a-z0-9._/-]+\))?!?: .*[^[:space:]].*' || (echo 'Error: commit message must follow Conventional Commits: <type>(optional-scope): <description>' >&2 && echo 'Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, spike' >&2 && exit 1)
 
 # ---------------------------------------------------------------------------
 # Phase 1 (Go Control Plane & Workers) — Uncomment once go.mod & code exist
