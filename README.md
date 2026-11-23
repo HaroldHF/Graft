@@ -39,9 +39,9 @@ Start with the [Documentation Hub](./docs/README.md) for the full pre-implementa
 | :--- | :--- | :--- |
 | [Documentation Hub](./docs/README.md) | Engineering workflow, index of all docs, and maintenance rules | Active |
 | [Architecture RFC-001](./docs/architecture.md) | Problem statement, scope, high-level topology, state machine, sequence diagram, and spike inputs | `Draft (In Research)` |
-| [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `3 Pending` |
-| [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `Template (Pending Spikes)` |
-| [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `1 Accepted, 4 Proposed` |
+| [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `1 Completed, 2 Pending` |
+| [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `In Progress (1/3 Spikes Completed)` |
+| [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `2 Accepted, 3 Proposed` |
 | [Requirements](./docs/requirements.md) | Functional and non-functional requirements (frozen post-spikes) | `Template (Pending Evidence)` |
 | [Threat Model](./docs/threat-model.md) | Trust boundaries, attack vectors, guardrails, and test verification | `Template (Pending Evidence)` |
 | [Benchmarks](./docs/benchmarks.md) | Mini SWE-bench metrics, harness setup, and local vs. cloud comparison | `Template (Pending Evidence)` |

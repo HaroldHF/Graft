@@ -7,7 +7,7 @@
 
 ## Context
 
-Graft runs untrusted repository code and LLM-generated patches. We must strictly isolate network access, CPU, memory (`1 vCPU`, `1 GB RAM` baseline), and process counts (`PidsLimit`), enforce command timeouts, stream container logs live, and guarantee clean container/volume teardown even after worker crashes.
+Graft runs untrusted repository code and LLM-generated patches. We must strictly isolate network access, CPU, memory (`1 vCPU`, `1 GiB RAM` baseline), and process counts (`PidsLimit`), enforce command timeouts, stream container logs live, and guarantee clean container/volume teardown even after worker crashes.
 
 ## Options Considered
 
@@ -21,19 +21,19 @@ We adopt **Option A (`Go Docker Engine SDK + Ephemeral Containers`)** with the f
 
 - **Typed Lifecycle & Error Handling:** Direct API calls provide structured container IDs (UUID tracking for the 10-minute crash-recovery reaper), reliable stream multiplexing (`stdcopy.StdCopy`) for SSE logs, and programmatic enforcement of cgroup/PID limits without fragile CLI output parsing.
 - **Clean Isolation Per Job:** Ephemeral containers eliminate state bleed, leftover background processes, or cross-repository contamination that pooled persistent containers risk.
-- **Official Moby Go SDK (`v29+` Compatible):** Use `github.com/moby/moby/client` (`client.New(client.FromEnv)`) and `github.com/moby/moby/api/types` rather than deprecated `github.com/docker/docker` or `NewClientWithOpts`.
+- **Official Moby Go SDK (`v29+` Compatible):** Use `github.com/moby/moby/client` (`client.New(client.FromEnv)`) and `github.com/moby/moby/api` (`api/types` and `api/pkg/stdcopy`) rather than deprecated `github.com/docker/docker` or `NewClientWithOpts`.
 - **Network & Git Credential Boundary (Variant B):** Create every sandbox container with `HostConfig.NetworkMode = "none"` from creation (`lo` interface only; `100%` HTTP/DNS blocked in benchmarks and `~24%` lower baseline lifecycle overhead than `NetworkDisconnect`: `347ms` vs. `458ms` median). Keep all authenticated `git clone` and `git push` operations on the worker host (with git hooks/autocrlf disabled and tokens passed ephemerally without persisting them into `.git/config`). Dynamic `NetworkDisconnect`/`NetworkConnect` is rejected.
-- **Abstracted Workspace Provisioning & Optional `:ro` Caches:** Keep workspace transport behind the `SandboxManager` interface:
-  - On native Linux workers/containers, use `ext4`/`tmpfs` ephemeral mounts or Docker volumes with `Config.User` aligned to the worker `uid:gid` (avoiding `root:root` artifacts and achieving ~`257ms` container read I/O on `~1,400` files).
-  - On Windows/macOS hosts (where cross-VM NTFS bind-mounts degraded full-tree container reads to `22.44s`), inject the working tree via buffered `CopyToContainer` excluding `.git/` (restoring `260ms` native container I/O and keeping `.git/` outside the sandbox) and extract unified diffs back to the host (`65ms` median diff + `git apply --check`).
+- **Abstracted Workspace Provisioning & `.git/` Isolation:** Keep workspace transport behind the `SandboxManager` interface while ensuring the host's `.git/` directory is **never** mounted writable inside the sandbox (preventing untrusted code from modifying `.git/config` or `.git/hooks/` to trigger RCE when the worker executes host `git` commands):
+  - On native Linux workers/containers, use `ext4`/`tmpfs` ephemeral mounts or Docker volumes with `Config.User` aligned to the worker `uid:gid`, keeping the host `.git/` outside the sandbox mount (e.g., cloning with `--separate-git-dir` outside the mount point or mounting a clean working tree and applying validated unified diffs back to the host clone), achieving ~`257ms` container read I/O on `~1,400` files.
+  - On Windows (measured) and optionally macOS / non-Linux hosts without native `ext4` (where cross-VM Windows↔WSL2 NTFS bind-mounts degraded full-tree container reads to `22.44s`), inject the working tree via buffered `CopyToContainer` excluding `.git/` (restoring `260ms` native container I/O) and extract unified diffs back to the host (`65ms` median diff + `git apply --check`).
   - Any pre-hydrated dependency caches mounted read-only (`:ro`) for offline test execution must be populated in a separate credential-less preparer container rather than running repository install scripts (`npm`/`pip`) on the worker host.
-- **Mandatory Forced Teardown on Timeout:** Because canceling `ExecAttach`'s `context.WithTimeout` only closes the client stream and leaves in-container processes running (`Running=true` verified empirically), `SandboxManager` must follow timeout expiry with `ContainerRemove(..., Force: true, RemoveVolumes: true)` on a fresh bounded cleanup context (`49ms` measured teardown), backed by the 10-minute crash-recovery reaper.
+- **Mandatory Forced Teardown on Timeout:** Because canceling `ExecAttach`'s `context.WithTimeout` only closes the client stream and leaves in-container processes running (`Running=true` verified empirically), `SandboxManager` must follow timeout expiry with `ContainerRemove(..., Force: true, RemoveVolumes: true)` on a fresh bounded cleanup context (`49ms` measured in timeout test), backed by the 10-minute crash-recovery reaper.
 - **Verified Resource Limits:** Enforce `NanoCPUs: 1_000_000_000` (`1 vCPU`), `Memory: 1 << 30` (`1 GiB`), and `PidsLimit: 256` (verified via Linux cgroups v2).
 
 ## Consequences
 
-- **Positive:** Zero network stack (`lo` only) and zero GitHub credentials inside sandboxes, deterministic cgroup v2 enforcement, clean diff-based host push flow, and `~49ms`–`170ms` teardown with zero orphan containers/volumes.
-- **Negative / Trade-offs:** Higher per-job startup latency compared to warm containers; workers require Docker socket access (`npipe:////./pipe/docker_engine` on Windows; `0660` `/var/run/docker.sock` on Linux requiring socket GID alignment or a socket proxy, plus matching `Config.User` on Linux bind-mounts); Windows/macOS local `CopyToContainer` incurs host NTFS file-open overhead (`~12.5s` for `1,410` files) unless running workers inside Linux containers.
+- **Positive:** Zero network stack (`lo` only), zero GitHub credentials and zero writable host `.git/` inside sandboxes, deterministic cgroup v2 enforcement, clean diff-based host push flow, and `68ms`–`163ms` median teardown (`170ms` P95) across `NetworkMode: "none"` suites (`49ms` `n=1` in forced timeout termination) with zero orphan containers/volumes.
+- **Negative / Trade-offs:** Higher per-job startup latency compared to warm containers; workers require Docker socket access (`npipe:////./pipe/docker_engine` on Windows; `0660` `/var/run/docker.sock` on Linux requiring socket GID alignment or a socket proxy, plus matching `Config.User` on Linux bind-mounts); Windows local `CopyToContainer` (and optionally non-Linux hosts without native `ext4`) incurs host file-open overhead (`~12.5s` on Windows NTFS for `1,410` files) unless running workers inside Linux containers.
 
 ## References
 
