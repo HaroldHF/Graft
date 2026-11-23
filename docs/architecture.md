@@ -82,7 +82,7 @@ flowchart TD
 | **Control Plane API** | Go (`chi`) | Webhook reception, HMAC signature verification, idempotency control, and job status queries | `HTTP POST /api/v1/webhooks/github` |
 | **Persistence** | PostgreSQL (`sqlc`) | Persist job state machine, step-by-step history (audit trail), and repository configurations | SQL tables + `JSONB` columns |
 | **Job Queue & Bus** | Redis | Decouple asynchronous tasks between API and Workers, plus a Pub/Sub channel for live events | Redis Streams (`graft:jobs`) & Pub/Sub (`graft:telemetry`) |
-| **Sandbox Manager** | Go + Docker SDK | Full container lifecycle: creation, ephemeral volume mounts, network cut-off, cgroup limits, and teardown | Go interface `SandboxManager` |
+| **Sandbox Manager** | Go + Docker SDK | Full container lifecycle: creation, clean workspace provisioning, `NetworkMode: "none"` isolation, cgroup limits, and forced teardown | Go interface `SandboxManager` |
 | **AST Indexer** | Tree-sitter (Go) | Generate syntactic repository maps to reduce prompt context window usage | In-memory Repository Map |
 | **Agent Runtime** | Go + MCP | Reasoning loop (Plan & Execute), tool-call validation, and security guardrails | MCP JSON-RPC Client/Server |
 | **SSE Gateway** | Go | Relay container and LLM logs in real time to the frontend | `HTTP GET /api/v1/jobs/{id}/stream` |
@@ -149,10 +149,10 @@ sequenceDiagram
 
     Q->>W: Dequeue Job Task
     W->>DB: Update state (PROVISIONING)
-    W->>DK: Create Container (limits: 1 vCPU, 1 GB RAM)
-    DK-->>SBX: Container initialized
-    W->>SBX: Git clone repo & checkout branch
-    W->>DK: Disconnect Network (Isolation ON)
+    W->>GH: Clone repo on host (hooks disabled, ephemeral token)
+    W->>DK: Create Container (NetworkMode none, 1 vCPU, 1 GiB RAM, PidsLimit)
+    DK-->>SBX: Container initialized (offline from creation)
+    W->>SBX: Provision clean workspace (host .git excluded)
     W->>DB: Update state (ANALYZING)
 
     loop Reasoning Loop (Max N iterations)
@@ -166,33 +166,34 @@ sequenceDiagram
     end
 
     alt Tests Passed
-        W->>DK: Connect Network (Temporary for Push)
-        W->>SBX: Git push branch to origin
-        W->>GH: Open Pull Request + Summary Log
+        W->>SBX: Extract unified diff
+        W->>W: Validate & apply diff to host clone
+        W->>GH: Git push branch from host & open PR
         W->>DB: Update state (PR_OPENED)
     else Tests Failed / Max Iterations Exceeded
         W->>GH: Post comment with failure diagnostics
         W->>DB: Update state (FAILED)
     end
 
-    W->>DK: Remove Container & Temporary Volumes
+    W->>DK: Force-Remove Container & Temp Workspace
 ```
 
 > [!NOTE]
-> **Security Review Item:** Reconnecting the sandbox container's network for `git push` (steps 27–28) would require git credentials accessible to the sandbox unless pushing happens from the worker host over a shared ephemeral volume. See [Threat Model](./threat-model.md) and [Spike 001](./spikes/001-docker-network-isolation.md).
+> **Sandbox Isolation Decided ([ADR-002](./adr/002-docker-sdk-sandbox.md) `Accepted`):** Per [Spike 001](./spikes/001-docker-network-isolation.md), sandboxes always start with `NetworkMode: "none"` and never receive GitHub credentials or writable host `.git/` directories; `git clone` and `git push` run exclusively on the worker host. See [Threat Model](./threat-model.md).
 
 ---
 
 ## 6. Open Questions and Uncertainties (Spike Inputs)
 
-The following design questions must be resolved through technical spikes before freezing [requirements.md](./requirements.md):
+The following design questions remain to be resolved through technical spikes before freezing [requirements.md](./requirements.md):
 
-1. **[Spike 001 — Docker Network Isolation](./spikes/001-docker-network-isolation.md):** What is the latency and operational impact of dynamically disconnecting a container's network interface via the Docker Engine API compared to creating the container with `NetworkMode: "none"` from the start?
-2. **[Spike 002 — Tree-sitter Go Bindings](./spikes/002-treesitter-go-bindings.md):** Is it preferable to compile Tree-sitter bindings with CGO in Go or use WebAssembly / pure-Go wrappers to simplify cross-compilation?
-3. **[Spike 003 — Ollama Tool Calling](./spikes/003-ollama-tool-calling.md):** What JSON tool-calling formatting success rate do Qwen 2.5 Coder 7B vs. 14B achieve when running locally under Ollama?
+1. **[Spike 002 — Tree-sitter Go Bindings](./spikes/002-treesitter-go-bindings.md):** Is it preferable to compile Tree-sitter bindings with CGO in Go or use WebAssembly / pure-Go wrappers to simplify cross-compilation?
+2. **[Spike 003 — Ollama Tool Calling](./spikes/003-ollama-tool-calling.md):** What JSON tool-calling formatting success rate do Qwen 2.5 Coder 7B vs. 14B achieve when running locally under Ollama?
 
 > [!NOTE]
-> **GitHub App Installation Token Caching:** Decided in [ADR-005](./adr/005-github-app-token-manager.md) (`Accepted`) — minting and refreshing 1-hour Installation Access Tokens uses a per-worker in-memory `TokenManager` with `singleflight` deduplication (validated directly via Phase 1 `go test -race` unit tests rather than a disposable spike).
+> **Resolved Pre-Implementation Decisions:**
+> - **Docker SDK & Network Isolation:** Decided in [ADR-002](./adr/002-docker-sdk-sandbox.md) (`Accepted`) via [Spike 001](./spikes/001-docker-network-isolation.md) — `github.com/moby/moby/client`, `NetworkMode: "none"` from creation, host-side Git with isolated host `.git/`, abstracted workspace transport, and mandatory forced `ContainerRemove` on timeout.
+> - **GitHub App Installation Token Caching:** Decided in [ADR-005](./adr/005-github-app-token-manager.md) (`Accepted`) — minting and refreshing 1-hour Installation Access Tokens uses a per-worker in-memory `TokenManager` with `singleflight` deduplication (validated directly via Phase 1 `go test -race` unit tests rather than a disposable spike).
 
 ---
 
