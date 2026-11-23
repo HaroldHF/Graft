@@ -1,7 +1,7 @@
 # Spike-001: Container Isolation and Network Control with Docker SDK (Go)
 
-- **Status:** `Pending`
-- **Date:** `2026-11-21`
+- **Status:** `Completed`
+- **Date:** `2026-11-22`
 - **Timebox:** `0.5–1 day`
 - **Informs / Blocks:** [ADR-002](../adr/002-docker-sdk-sandbox.md), [Threat Model](../threat-model.md), [Requirements](../requirements.md)
 
@@ -34,21 +34,81 @@
 
 ## Result
 
-`Pending`
+**Completed (with empirical recommendation: Variant B `NetworkMode: "none"` + host-side Git, with abstracted workspace transport).**
+
+### Environment & Toolchain
+
+- **Host & Go Runtime:** Windows (`windows/amd64`), Go `1.26.2` (+ cross-compiled static `linux/amd64` probe binary)
+- **Docker Engine:** Docker Desktop `4.99.0 (245822)` running Linux Engine `29.9.3` (API `1.56`, MinAPI `1.40`)
+- **Go SDK:** `github.com/moby/moby/client v0.6.3` and `github.com/moby/moby/api v1.57.0` (isolated disposable PoC in `tmp/spike-001/`)
+- **Fixture Image:** `graft-spike001-sandbox:latest` (`alpine:3.21` + `git` + `curl`)
+
+### 1. Primary 10-Run Benchmark (`HaroldHF/Graft` — Small Repository)
+
+| Metric | Variant A (`NetworkDisconnect`) Min / Med / P95 / Max | Variant B (`NetworkMode: "none"` + Host Clone) Min / Med / P95 / Max |
+| :--- | :--- | :--- |
+| `Create + Start` | `154ms` / `188ms` / `204ms` / `206ms` | `127ms` / `139ms` / `154ms` / `162ms` |
+| `Git Clone` (`--depth 1`) | `599ms` / `623ms` / `697ms` / `717ms` *(inside)* | `690ms` / `707ms` / `754ms` / `775ms` *(host)* |
+| `NetworkDisconnect` | `81ms` / `119ms` / `142ms` / `143ms` | `0ms` *(not applicable)* |
+| `Isolated Exec + Probes` | `92ms` / `94ms` / `95ms` / `95ms` | `93ms` / `94ms` / `99ms` / `100ms` |
+| `Host git status` | `N/A` | `35ms` / `39ms` / `41ms` / `41ms` |
+| `ContainerRemove` (`Force: true`) | `44ms` / `58ms` / `65ms` / `66ms` | `45ms` / `68ms` / `93ms` / `95ms` |
+| `Host Dir Remove` (`os.RemoveAll`) | `0ms` | `7ms` / `9ms` / `12ms` / `13ms` |
+| **Lifecycle Overhead (excl. clone)** | `406ms` / **`458ms`** / **`476ms`** / `479ms` | `329ms` / **`347ms`** / **`379ms`** / `385ms` |
+| **Total End-to-End** | `1.027s` / **`1.077s`** / **`1.17s`** / `1.196s` | `1.035s` / **`1.061s`** / **`1.101s`** / `1.114s` |
+
+- **Additional checks:** `NetworkConnect` reconnect overhead measured separately in single-run Variant A was `47ms`. Both variants achieved `10/10` outbound HTTP block (`curl` exit `6`: `Could not resolve host: example.com`), `10/10` DNS block (`nslookup` exit `1`: `Network unreachable`), and `0` leftover containers. Variant B passed `10/10` host `git status` detection (`.spike001-marker`) and `os.RemoveAll` cleanup without file-lock errors.
+
+### 2. Larger-Repository Sensitivity Benchmark (`2834kendall/Celulares_Alex_Frontend`)
+
+Measured repo footprint: `1,392`–`1,410` working-tree files, `22.7`–`22.9 MB` working tree (`37.0`–`44.0 MB` total on disk). To measure cross-VM NTFS bind-mount I/O degradation vs. native container `overlayfs`/`ext4`, a full non-`.git` file read (`find` + `cat` -> `TreeWalk I/O`) was timed inside the isolated container:
+
+| Variant | Runs | `Git Clone` (Med) | Workspace Transfer / Init (Med / P95) | `TreeWalk I/O` (Med) | Diff / Status Round-Trip (Med) | `Host Dir Remove` (Med) | Total End-to-End (Med / P95) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **A (`NetworkDisconnect`, native `ext4`)** | `5` | `2.483s` *(inside)* | `110ms` *(disconnect)* | **`257ms`** (`241ms–260ms`) | `N/A` | `0ms` | `3.261s` (`3.206s–3.362s`) |
+| **B (`NetworkMode: "none"` + Windows NTFS bind-mount)** | `1` *(180s cap)* | `2.481s` *(host)* | `0ms` | **`22.44s`** *(timed out >30s prior)* | `209ms` (`git status`) | `244ms` | `27.978s` |
+| **B2 Baseline (`CopyToContainer`, `.git/` incl., unbuffered)** | `5` | `2.546s` *(host)* | `12.9s` / `18.946s` (`20.391s` max) | **`266ms`** (`246ms–273ms`) | `402ms` (`git apply --check` `5/5` OK) | `203ms` | `16.572s` / `22.779s` |
+| **B2 Optimized (`CopyToContainer`, `bufio 256 KiB`, no `.git/` + `git init`)** | `5` | `2.446s` *(host)* | `12.479s` / `12.785s` + `737ms` `git init` | **`260ms`** (`244ms–270ms`) | **`65ms`** (`git apply --check` `5/5` OK) | `139ms` | `16.495s` / `16.89s` |
+
+- All runs across Variants A, B, and B2 achieved `100%` HTTP/DNS isolation and `0` leftover containers or temp directories.
+- Excluding `.git/` + buffering `256 KiB` eliminated the `20.391s` `CopyToContainer` tail spike (`12.845s` max), sped up diff extraction by `6.2x` (`402ms` -> `65ms`), and kept `.git/` completely out of the sandbox. Because shallow `--depth 1` clones hold most files in the working tree (`1,410` files), Windows host `CopyToContainer` time remained dominated by per-file NTFS/Defender `open` + `stat` overhead (~8.8 ms/file).
+
+### 3. Resource Caps, Timeout Termination & Zero-Orphan Verification
+
+- **Cgroups v2 Enforcement:** `NanoCPUs: 1_000_000_000`, `Memory: 1 << 30`, and `PidsLimit: 256` produced exact container limits: `cpu.max=100000 100000`, `memory.max=1073741824`, and `pids.max=256`. Containers created with `NetworkMode: "none"` exposed only `lo` under `/sys/class/net` (no `eth0`).
+- **Timeout Termination (`sh -c "sleep 60"` under `5s` `context.WithTimeout`):**
+  - Context deadline expired at `5s` (`context deadline exceeded`), closing the hijacked attach connection.
+  - Calling `ExecInspect` `+100ms` after cancellation (before container removal) returned **`Running=true PID=3961 ExitCode=0`** — confirming that Go context cancellation alone does **not** terminate processes inside the container.
+  - Calling `ContainerRemove(..., Force: true, RemoveVolumes: true)` with a fresh `15s` cleanup context tore down the container in **`49ms`**.
+  - Post-suite `docker ps -a --filter label=graft.spike=001` and `docker volume ls --filter dangling=true` confirmed `0` orphan containers and `0` leaked volumes.
+
+### 4. Windows vs. Linux Docker Socket & Bind-Mount Observations
+
+| Probe Target | Socket / Transport | Ping Latency / API | Observed Permissions & Behavior |
+| :--- | :--- | :--- | :--- |
+| **Windows Host (`windows/amd64`)** | `npipe:////./pipe/docker_engine` | `3.25ms` (`API 1.56`) | Default non-admin user connects without privilege elevation; bind-mount files show `0:0 777`/`0:0 644` inside container and delete cleanly on host. |
+| **Linux Container as `root` (`0:0`)** | `unix:///var/run/docker.sock` | `6.183ms` (`API 1.56`) | `stat`: `srw-rw---- (660) 0:0 /var/run/docker.sock`. Connects cleanly via Unix socket. |
+| **Linux Container as `1000:1000`** | `unix:///var/run/docker.sock` | `Failed (exit 1)` | `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` without matching socket group (`docker` / `0`) or socket proxy. |
+| **Linux Container `--user 1000:1000` Bind-Mount** | `alpine:3.21` host mount | `N/A` (`exit 0`) | Created/deleted files as `1000:1000 644`, confirming `Config.User` alignment prevents `root:root`-owned bind-mount artifacts on native Linux workers. |
 
 ## Key Learnings
 
-- `TBD` — Expected observations to capture:
-  - Docker socket permissions and host OS quirks on Windows vs. Linux.
-  - Exact `HostConfig` configuration for `NetworkMode: "none"`, CPU/RAM cgroups, and `PidsLimit`.
-  - Latency delta between dynamic `NetworkDisconnect` and `NetworkMode: "none"`.
-  - Whether host-side `git clone`/`git push` cleanly eliminates credentials inside the container without bind-mount permission friction.
+1. **Docker Engine 29+ Go SDK Migration:** `github.com/docker/docker` is deprecated upstream; Engine 29+ targets `github.com/moby/moby/client` (`v0.6.3`) and `github.com/moby/moby/api` (`v1.57.0`). `client.NewClientWithOpts` is deprecated in favor of `client.New(client.FromEnv)`, which defaults to `npipe:////./pipe/docker_engine` (Windows) or `unix:///var/run/docker.sock` (Linux) and negotiates API versions (`1.40`–`1.57`) automatically.
+2. **`NetworkMode: "none"` Wins on Security & Baseline Overhead:** Starting without a network interface (`lo` only) removes `bridge` setup/teardown cost (~`24%` lower median lifecycle overhead on small repos: `347ms` vs. `458ms`), eliminates dynamic `NetworkDisconnect`/`NetworkConnect` failure modes, and keeps GitHub credentials strictly on the worker host.
+3. **Bind-Mounts Do Not Scale on Windows/macOS Local Dev (`87x` I/O Penalty):** While `os.RemoveAll` stayed fast on small repos (`9ms` med) and acceptable on ~1,410 files (`139ms`–`244ms`), container-side full-tree reads over a Windows↔WSL2 bind-mount dropped from `257ms` (native `ext4`) to **`22.44s`** (and exceeded `30s` initially). Abstracting workspace injection behind `SandboxManager` allows using native `ext4`/ephemeral volumes in Linux production while supporting `CopyToContainer` (excluding `.git/`) + unified `git diff` extraction (`65ms` med) on Windows/macOS hosts.
+4. **Never Leave `.git` or Tokens Accessible to the Sandbox:** Host-side cloning must disable hooks/autocrlf (`-c core.autocrlf=false -c core.hooksPath=/dev/null -c core.fsmonitor=false -c submodule.recurse=false`) and pass tokens ephemerally (never embedded in `.git/config`); when using `CopyToContainer`, omitting `.git/` prevents exposing repository history or git configs altogether.
+5. **Context Cancellation Alone Does Not Kill Container Execs:** Canceling `ExecAttach`'s context only closes the client HTTP stream (`Running=true` persisted inside the container). Every unrecoverable exec/job timeout must immediately invoke `ContainerRemove(..., Force: true, RemoveVolumes: true)` with a fresh bounded cleanup context (backed by the 10-minute crash-recovery reaper).
+6. **Linux Socket & Non-Root File Ownership:** Native Linux deployments expose `/var/run/docker.sock` as `0660`; non-root worker containers require socket GID alignment (e.g., `GroupAdd`) or a socket proxy, and any Linux bind-mount should set `Config.User` to the worker's `uid:gid`.
 
 ## Impact on Requirements & ADRs
 
-- **Requirements ([requirements.md](../requirements.md)):** Will establish concrete container provisioning timeouts, test execution timeouts, and baseline resource limits.
-- **ADRs & Threat Model:** Will finalize the network isolation strategy in [ADR-002](../adr/002-docker-sdk-sandbox.md) and inform the git-push network boundary in [Threat Model](../threat-model.md).
+- **ADRs:** Finalizes [ADR-002](../adr/002-docker-sdk-sandbox.md) (`Accepted`) using `github.com/moby/moby/client`, `NetworkMode: "none"`, abstracted workspace transport (`ext4` native mount/volume on Linux; `CopyToContainer` w/o `.git/` on Windows/macOS), and mandatory forced teardown on timeout.
+- **Requirements ([requirements.md](../requirements.md)):** Provides measured baselines for container provisioning (`<200ms` `Create+Start` on cached image), forced teardown (`~49ms`–`170ms`), resource limits (`1 vCPU`, `1 GiB RAM`, `256` PIDs), and host-transfer overhead budgets to be consolidated under Phase 0 Gate (Issue `#4`).
+- **Threat Model ([threat-model.md](../threat-model.md)):** Validates `NetworkMode: "none"` (`100%` HTTP/DNS block, `lo` only), host-only Git credential boundary, `.git/` exclusion via `CopyToContainer`, and Docker socket `0660` privilege hardening (and notes that any pre-hydrated read-only `:ro` dependency caches for offline tests should be populated inside a separate credential-less preparer container rather than running `npm`/`pip` install scripts on the worker host).
 
 ## Recommendation & Next Steps
 
-- `TBD`
+1. **Adopt Variant B (`NetworkMode: "none"` + Host-Side Git) in [ADR-002](../adr/002-docker-sdk-sandbox.md)** and reject dynamic `NetworkDisconnect`/`NetworkConnect`.
+2. **Design `SandboxManager` with pluggable workspace provisioning** (`ext4` bind-mount/ephemeral volume on Linux production; `CopyToContainer` excluding `.git/` + diff extraction on Windows/macOS hosts, plus optional `:ro` dependency-cache mounts for offline test execution).
+3. **Enforce a strict cleanup contract:** wrap `ExecAttach` stream reads with `context.AfterFunc` to unblock on cancellation and always tear down timed-out sandboxes via `ContainerRemove(Force: true, RemoveVolumes: true)` on a fresh context.
+4. **Keep Spike-001 PoC code (`tmp/spike-001/`) out of `main`**, proceed to [Spike-002](./002-treesitter-go-bindings.md) and [Spike-003](./003-ollama-tool-calling.md), and freeze [requirements.md](../requirements.md) and [threat-model.md](../threat-model.md) once all three spikes complete.
