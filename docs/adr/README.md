@@ -19,8 +19,8 @@ This directory captures key architectural decisions for **Graft**, documenting t
 
 | ID | Title | Status | Date | Blocking / Related Spike | Summary |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| ADR-001 | [Go Modular Monolith Control Plane](./001-go-control-plane.md) | `Proposed` | `2026-11-21` | None | Use a Go modular monolith (`chi`, `sqlc`, Docker SDK) over splitting into a Python/LangChain service |
+| ADR-001 | [Go Modular Monolith Control Plane](./001-go-control-plane.md) | `Accepted` | `2026-11-23` | [Spike 002](../spikes/002-treesitter-go-bindings.md) | Use a `CGO_ENABLED=0` Go modular monolith (`chi`, `sqlc`, Docker SDK, pure-Go AST) over splitting into a Python/LangChain service |
 | ADR-002 | [Docker Engine SDK Sandbox Manager](./002-docker-sdk-sandbox.md) | `Accepted` | `2026-11-22` | [Spike 001](../spikes/001-docker-network-isolation.md) | Manage ephemeral `NetworkMode: "none"` containers via `github.com/moby/moby/client` with host-side Git instead of CLI shell-outs or dynamic network toggles |
-| ADR-003 | [Tree-sitter AST Mapping & MCP Tools](./003-treesitter-and-mcp.md) | `Proposed` | `2026-11-21` | [Spike 002](../spikes/002-treesitter-go-bindings.md) | Index repositories with Tree-sitter and expose tools over MCP JSON-RPC instead of dumping raw files into prompts |
+| ADR-003 | [Tree-sitter AST Mapping & MCP Tools](./003-treesitter-and-mcp.md) | `Accepted` | `2026-11-23` | [Spike 002](../spikes/002-treesitter-go-bindings.md) | Index repositories with pure-Go `gotreesitter` behind `ASTIndexer` and expose guarded tools over MCP JSON-RPC |
 | ADR-004 | [OpenAI-Compatible LLM Provider Abstraction](./004-llm-provider-abstraction.md) | `Proposed` | `2026-11-21` | [Spike 003](../spikes/003-ollama-tool-calling.md) | Target the standard OpenAI `v1/chat/completions` contract to switch seamlessly between local Ollama and cloud APIs |
 | ADR-005 | [GitHub App Installation Token Manager](./005-github-app-token-manager.md) | `Accepted` | `2026-11-21` | None | Use a per-worker in-memory cache with `singleflight` refresh and `401` retry, verified via Phase 1 `go test -race` unit tests |

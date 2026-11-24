@@ -27,7 +27,7 @@ Rather than running LLM-generated code directly on the host or treating agents a
 | Control Plane & Workers | Go (`chi`), Redis Streams | HTTP webhook ingestion, job orchestration, worker execution |
 | Persistence | PostgreSQL (`sqlc`) | Job state machine, audit trail (JSONB), repository settings |
 | Sandbox Runtime | Docker Engine API (Go SDK) | Ephemeral isolated containers, resource & network limits |
-| Code Intelligence | Tree-sitter (Go), MCP | AST repository mapping and structured agent tool calling |
+| Code Intelligence | Tree-sitter (Pure Go — `gotreesitter`), MCP | AST repository mapping and structured agent tool calling |
 | LLM Integration | OpenAI-compatible HTTP (`Ollama` / Cloud APIs) | Autonomous reasoning and patch generation loop |
 | Real-Time UI | Go SSE Gateway, React + TypeScript + Tailwind | Live console logs, job status, and `git diff` viewer |
 
@@ -39,16 +39,16 @@ Start with the [Documentation Hub](./docs/README.md) for the full pre-implementa
 | :--- | :--- | :--- |
 | [Documentation Hub](./docs/README.md) | Engineering workflow, index of all docs, and maintenance rules | Active |
 | [Architecture RFC-001](./docs/architecture.md) | Problem statement, scope, high-level topology, state machine, sequence diagram, and spike inputs | `Draft (In Research)` |
-| [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `1 Completed, 2 Pending` |
-| [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `In Progress (1/3 Spikes Completed)` |
-| [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `2 Accepted, 3 Proposed` |
+| [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `2 Completed, 1 Pending` |
+| [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `In Progress (2/3 Spikes Completed)` |
+| [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `4 Accepted, 1 Proposed` |
 | [Requirements](./docs/requirements.md) | Functional and non-functional requirements (frozen post-spikes) | `Template (Pending Evidence)` |
 | [Threat Model](./docs/threat-model.md) | Trust boundaries, attack vectors, guardrails, and test verification | `Template (Pending Evidence)` |
 | [Benchmarks](./docs/benchmarks.md) | Mini SWE-bench metrics, harness setup, and local vs. cloud comparison | `Template (Pending Evidence)` |
 
 ## High-Level Roadmap
 
-1. **Phase 0 — Architecture & Technical Spikes (Current):** Complete [Spikes 001–003](./docs/spikes/README.md), consolidate findings in [learnings.md](./docs/spikes/learnings.md), finalize remaining [ADRs 001–004](./docs/adr/README.md), resolve open security items in the [Threat Model](./docs/threat-model.md), and freeze [Requirements](./docs/requirements.md).
+1. **Phase 0 — Architecture & Technical Spikes (Current):** Complete [Spikes 001–003](./docs/spikes/README.md), consolidate findings in [learnings.md](./docs/spikes/learnings.md), finalize remaining [ADR-004](./docs/adr/004-llm-provider-abstraction.md), resolve open security items in the [Threat Model](./docs/threat-model.md), and freeze [Requirements](./docs/requirements.md).
 2. **Phase 1 — Control Plane & Sandbox Core:** Implement GitHub webhook ingestion, PostgreSQL schema (`sqlc`), Redis Streams worker loop, reaper crash recovery, and the Go `SandboxManager`.
 3. **Phase 2 — Agent Runtime, Tree-sitter & MCP:** Build the AST repository indexer, MCP tool server/client, diff validator guardrails, and OpenAI-compatible LLM loop.
 4. **Phase 3 — SSE Telemetry & Dashboard:** Add Redis Pub/Sub log streaming, SSE gateway, and the React/Tailwind live job & diff UI.

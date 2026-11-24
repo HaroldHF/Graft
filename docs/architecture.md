@@ -55,11 +55,11 @@ flowchart TD
     subgraph worker_cluster["Worker Cluster / Job Execution"]
         W["Graft Worker Node"] -->|"Dequeue Task"| REDIS
         W -->|"State Transition"| DB
+        W -->|"AST Repo Map"| TS["Tree-sitter Engine (Pure Go)"]
         W -->|"Provision"| DOCKER["Docker Engine API"]
         DOCKER -->|"Ephemeral Container"| SBX["Sandbox Environment"]
 
         subgraph sandbox_container["Sandbox Isolated Container"]
-            SBX -->|"Repo Code + AST"| TS["Tree-sitter Engine"]
             SBX -->|"Isolated Execution"| TEST["Test Runner (go test / pytest)"]
         end
 
@@ -83,7 +83,7 @@ flowchart TD
 | **Persistence** | PostgreSQL (`sqlc`) | Persist job state machine, step-by-step history (audit trail), and repository configurations | SQL tables + `JSONB` columns |
 | **Job Queue & Bus** | Redis | Decouple asynchronous tasks between API and Workers, plus a Pub/Sub channel for live events | Redis Streams (`graft:jobs`) & Pub/Sub (`graft:telemetry`) |
 | **Sandbox Manager** | Go + Docker SDK | Full container lifecycle: creation, clean workspace provisioning, `NetworkMode: "none"` isolation, cgroup limits, and forced teardown | Go interface `SandboxManager` |
-| **AST Indexer** | Tree-sitter (Go) | Generate syntactic repository maps to reduce prompt context window usage | In-memory Repository Map |
+| **AST Indexer** | Tree-sitter (Pure Go — `gotreesitter`) | Generate syntactic repository maps to reduce prompt context window usage | Go interface `ASTIndexer` / In-memory Repository Map |
 | **Agent Runtime** | Go + MCP | Reasoning loop (Plan & Execute), tool-call validation, and security guardrails | MCP JSON-RPC Client/Server |
 | **SSE Gateway** | Go | Relay container and LLM logs in real time to the frontend | `HTTP GET /api/v1/jobs/{id}/stream` |
 | **Dashboard** | React + TS + Tailwind | Display current job status, `git diff` viewer, and live sandbox console | SPA consuming SSE & REST APIs |
@@ -154,9 +154,9 @@ sequenceDiagram
     DK-->>SBX: Container initialized (offline from creation)
     W->>SBX: Provision clean workspace (host .git excluded)
     W->>DB: Update state (ANALYZING)
+    W->>W: Build AST Repo Map (Pure Go)
 
     loop Reasoning Loop (Max N iterations)
-        W->>SBX: Run Tree-sitter (Repo Map)
         W->>LLM: Prompt + AST Context + Issue
         LLM-->>W: Tool Call (read_file / apply_patch)
         W->>SBX: Apply unified diff
@@ -187,12 +187,12 @@ sequenceDiagram
 
 The following design questions remain to be resolved through technical spikes before freezing [requirements.md](./requirements.md):
 
-1. **[Spike 002 — Tree-sitter Go Bindings](./spikes/002-treesitter-go-bindings.md):** Is it preferable to compile Tree-sitter bindings with CGO in Go or use WebAssembly / pure-Go wrappers to simplify cross-compilation?
-2. **[Spike 003 — Ollama Tool Calling](./spikes/003-ollama-tool-calling.md):** What JSON tool-calling formatting success rate do Qwen 2.5 Coder 7B vs. 14B achieve when running locally under Ollama?
+1. **[Spike 003 — Ollama Tool Calling](./spikes/003-ollama-tool-calling.md):** What JSON tool-calling formatting success rate do Qwen 2.5 Coder 7B vs. 14B achieve when running locally under Ollama?
 
 > [!NOTE]
 > **Resolved Pre-Implementation Decisions:**
 > - **Docker SDK & Network Isolation:** Decided in [ADR-002](./adr/002-docker-sdk-sandbox.md) (`Accepted`) via [Spike 001](./spikes/001-docker-network-isolation.md) — `github.com/moby/moby/client`, `NetworkMode: "none"` from creation, host-side Git with isolated host `.git/`, abstracted workspace transport, and mandatory forced `ContainerRemove` on timeout.
+> - **Tree-sitter Go Bindings & Go Monolith Packaging:** Decided in [ADR-003](./adr/003-treesitter-and-mcp.md) and [ADR-001](./adr/001-go-control-plane.md) (`Accepted`) via [Spike 002](./spikes/002-treesitter-go-bindings.md) — pure-Go `gotreesitter` (`CGO_ENABLED=0` runtime builds) behind an `ASTIndexer` interface enforcing pre-parse per-file size caps and worker concurrency limits alongside cooperative `SetTimeoutMicros` / `SetMemoryBudgetBytes` guardrails and Repo Map token-budget scoping (with MCP JSON-RPC tool contracts to be validated in [Spike 003](./spikes/003-ollama-tool-calling.md) / Phase 2).
 > - **GitHub App Installation Token Caching:** Decided in [ADR-005](./adr/005-github-app-token-manager.md) (`Accepted`) — minting and refreshing 1-hour Installation Access Tokens uses a per-worker in-memory `TokenManager` with `singleflight` deduplication (validated directly via Phase 1 `go test -race` unit tests rather than a disposable spike).
 
 ---
