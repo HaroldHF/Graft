@@ -23,9 +23,9 @@ flowchart LR
 | Document | Purpose | Current Status | Link |
 | :--- | :--- | :--- | :--- |
 | Architecture RFC-001 | System scope, component topology, job state machine, sequence flow, and open questions | `Draft (In Research)` | [architecture.md](./architecture.md) |
-| Technical Spikes Index | Tracking log and workflow for timeboxed PoCs (`001`–`003`) | `1 Completed, 2 Pending` | [spikes/README.md](./spikes/README.md) |
-| Spike Learnings | Consolidated empirical findings and takeaways across spikes | `In Progress (1/3 Spikes Completed)` | [spikes/learnings.md](./spikes/learnings.md) |
-| ADR Index | Log of architectural decisions (`001`–`005`) and status lifecycle | `2 Accepted, 3 Proposed` | [adr/README.md](./adr/README.md) |
+| Technical Spikes Index | Tracking log and workflow for timeboxed PoCs (`001`–`003`) | `2 Completed, 1 Pending` | [spikes/README.md](./spikes/README.md) |
+| Spike Learnings | Consolidated empirical findings and takeaways across spikes | `In Progress (2/3 Spikes Completed)` | [spikes/learnings.md](./spikes/learnings.md) |
+| ADR Index | Log of architectural decisions (`001`–`005`) and status lifecycle | `4 Accepted, 1 Proposed` | [adr/README.md](./adr/README.md) |
 | Requirements | Functional (`FR`) and non-functional (`NFR`) specification frozen after spikes | `Template (Pending Evidence)` | [requirements.md](./requirements.md) |
 | Threat Model | Trust boundaries, threat matrix, guardrails, and open security questions | `Template (Pending Evidence)` | [threat-model.md](./threat-model.md) |
 | Benchmarks | Mini SWE-bench metrics, dataset spec, and local vs. cloud comparison tables | `Template (Pending Evidence)` | [benchmarks.md](./benchmarks.md) |
