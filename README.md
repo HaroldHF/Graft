@@ -16,7 +16,7 @@ Rather than running LLM-generated code directly on the host or treating agents a
 - **Deterministic Job State Machine:** Persists job state transitions and step-by-step audit trails in PostgreSQL, decoupled from worker execution via Redis Streams.
 - **Isolated Sandbox Execution:** Manages ephemeral containers directly through the Go Docker Engine SDK (`cgroups`, PID limits, ephemeral volumes, network isolation).
 - **AST-Guided Agent Runtime & MCP:** Indexes repository structure with Tree-sitter to build compact repository maps and exposes structured tools over Model Context Protocol (MCP) JSON-RPC.
-- **Provider-Agnostic LLM Client:** Uses an OpenAI-compatible `v1/chat/completions` interface to switch between local Ollama models and cloud LLM APIs.
+- **Provider-Agnostic LLM Client:** Uses a Go `LLMClient` interface supporting cloud OpenAI-compatible `v1/chat/completions` APIs and local Ollama (`/api/chat` with explicit `options.num_ctx` and `content` tool-call fallback).
 - **Real-Time Telemetry & Dashboard:** Streams sandbox and LLM logs via Redis Pub/Sub and Server-Sent Events (SSE) to a React dashboard.
 - **Evaluation Harness:** Benchmarks `Pass@1`, latency, and token usage on a curated mini SWE-bench suite.
 
@@ -28,7 +28,7 @@ Rather than running LLM-generated code directly on the host or treating agents a
 | Persistence | PostgreSQL (`sqlc`) | Job state machine, audit trail (JSONB), repository settings |
 | Sandbox Runtime | Docker Engine API (Go SDK) | Ephemeral isolated containers, resource & network limits |
 | Code Intelligence | Tree-sitter (Pure Go — `gotreesitter`), MCP | AST repository mapping and structured agent tool calling |
-| LLM Integration | OpenAI-compatible HTTP (`Ollama` / Cloud APIs) | Autonomous reasoning and patch generation loop |
+| LLM Integration | Go `LLMClient` (Cloud `v1/chat/completions` & Ollama `/api/chat`) | Autonomous reasoning and patch generation loop |
 | Real-Time UI | Go SSE Gateway, React + TypeScript + Tailwind | Live console logs, job status, and `git diff` viewer |
 
 ## Documentation Map
@@ -39,17 +39,17 @@ Start with the [Documentation Hub](./docs/README.md) for the full pre-implementa
 | :--- | :--- | :--- |
 | [Documentation Hub](./docs/README.md) | Engineering workflow, index of all docs, and maintenance rules | Active |
 | [Architecture RFC-001](./docs/architecture.md) | Problem statement, scope, high-level topology, state machine, sequence diagram, and spike inputs | `Draft (In Research)` |
-| [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `2 Completed, 1 Pending` |
-| [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `In Progress (2/3 Spikes Completed)` |
-| [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `4 Accepted, 1 Proposed` |
+| [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `3 Completed, 0 Pending` |
+| [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `Completed (3/3 Spikes Completed)` |
+| [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `5 Accepted, 0 Proposed` |
 | [Requirements](./docs/requirements.md) | Functional and non-functional requirements (frozen post-spikes) | `Template (Pending Evidence)` |
 | [Threat Model](./docs/threat-model.md) | Trust boundaries, attack vectors, guardrails, and test verification | `Template (Pending Evidence)` |
 | [Benchmarks](./docs/benchmarks.md) | Mini SWE-bench metrics, harness setup, and local vs. cloud comparison | `Template (Pending Evidence)` |
 
 ## High-Level Roadmap
 
-1. **Phase 0 — Architecture & Technical Spikes (Current):** Complete [Spikes 001–003](./docs/spikes/README.md), consolidate findings in [learnings.md](./docs/spikes/learnings.md), finalize remaining [ADR-004](./docs/adr/004-llm-provider-abstraction.md), resolve open security items in the [Threat Model](./docs/threat-model.md), and freeze [Requirements](./docs/requirements.md).
+1. **Phase 0 — Architecture & Technical Spikes (Current):** [Spikes 001–003](./docs/spikes/README.md) and ADRs `001`–`005` completed; next: resolve open security items in the [Threat Model](./docs/threat-model.md) and freeze [Requirements](./docs/requirements.md) from [learnings.md](./docs/spikes/learnings.md).
 2. **Phase 1 — Control Plane & Sandbox Core:** Implement GitHub webhook ingestion, PostgreSQL schema (`sqlc`), Redis Streams worker loop, reaper crash recovery, and the Go `SandboxManager`.
-3. **Phase 2 — Agent Runtime, Tree-sitter & MCP:** Build the AST repository indexer, MCP tool server/client, diff validator guardrails, and OpenAI-compatible LLM loop.
+3. **Phase 2 — Agent Runtime, Tree-sitter & MCP:** Build the AST repository indexer, MCP tool server/client, diff validator guardrails, and unified `LLMClient` agent loop (Cloud `v1/chat/completions` & Ollama `/api/chat`).
 4. **Phase 3 — SSE Telemetry & Dashboard:** Add Redis Pub/Sub log streaming, SSE gateway, and the React/Tailwind live job & diff UI.
 5. **Phase 4 — Mini SWE-bench Evaluation:** Run controlled evaluations across local Ollama and cloud models and record findings in [Benchmarks](./docs/benchmarks.md).

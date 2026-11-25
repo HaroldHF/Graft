@@ -29,7 +29,7 @@ Automated issue resolution using Large Language Models (LLMs) introduces two maj
 - Idempotent ingestion of webhooks signed by GitHub Apps (`HMAC-SHA256`).
 - Persistent job state machine in PostgreSQL paired with a Redis task queue.
 - Sandbox manager in Go using the Docker Engine API directly (network isolation, CPU/RAM/PID limits, and ephemeral volumes).
-- Provider-agnostic autonomous agent engine (supporting local Ollama and cloud APIs via an OpenAI-compatible client).
+- Provider-agnostic autonomous agent engine (supporting cloud OpenAI-compatible `v1/chat/completions` APIs and local Ollama `/api/chat` via a unified Go `LLMClient` interface).
 - Repository indexing via AST parsing with Tree-sitter and structured tool exposure via the Model Context Protocol (MCP).
 - Real-time log and telemetry streaming to a web dashboard via Server-Sent Events (SSE).
 - Benchmark evaluation suite (mini SWE-bench) to measure `Pass@1`, latency, and token usage.
@@ -64,7 +64,7 @@ flowchart TD
         end
 
         W -->|"MCP Protocol"| AGENT["Agent Runtime Loop"]
-        AGENT -->|"v1/chat/completions"| LLM["LLM Provider (Ollama or Cloud API)"]
+        AGENT -->|"OpenAI v1/chat/completions / Ollama /api/chat"| LLM["LLM Provider (Ollama or Cloud API)"]
     end
 
     W -->|"SSE Events / Stream Logs"| REDIS_PUB["Redis Pub/Sub"]
@@ -157,17 +157,22 @@ sequenceDiagram
     W->>W: Build AST Repo Map (Pure Go)
 
     loop Reasoning Loop (Max N iterations)
-        W->>LLM: Prompt + AST Context + Issue
-        LLM-->>W: Tool Call (read_file / apply_patch)
-        W->>SBX: Apply unified diff
-        W->>DB: Update state (TESTING)
-        W->>SBX: Exec 'go test' / 'pytest' (No network)
-        SBX-->>W: Exit Code (0 = Pass, >0 = Fail)
+        W->>LLM: Prompt + Scoped AST Context + Issue
+        LLM-->>W: Tool Call (read_file / list_symbols / search_replace)
+        W->>W: Validate MCP args & path guardrails
+        alt Discovery Tool (read_file / list_symbols)
+            W->>SBX: Read capped file or return AST symbols
+        else Edit Tool (search_replace)
+            W->>SBX: Apply search_replace in sandbox workspace (host clone untouched)
+            W->>DB: Update state (TESTING)
+            W->>SBX: Exec 'go test' / 'pytest' (No network)
+            SBX-->>W: Exit Code (0 = Pass, >0 = Fail)
+        end
     end
 
     alt Tests Passed
         W->>SBX: Extract unified diff
-        W->>W: Validate & apply diff to host clone
+        W->>W: Re-validate diff paths, headers & reject mode 120000, then apply to host clone
         W->>GH: Git push branch from host & open PR
         W->>DB: Update state (PR_OPENED)
     else Tests Failed / Max Iterations Exceeded
@@ -185,14 +190,13 @@ sequenceDiagram
 
 ## 6. Open Questions and Uncertainties (Spike Inputs)
 
-The following design questions remain to be resolved through technical spikes before freezing [requirements.md](./requirements.md):
-
-1. **[Spike 003 — Ollama Tool Calling](./spikes/003-ollama-tool-calling.md):** What JSON tool-calling formatting success rate do Qwen 2.5 Coder 7B vs. 14B achieve when running locally under Ollama?
+All planned Phase 0 technical spikes (`001`–`003`) are complete; remaining pre-implementation gate work tracks populating [requirements.md](./requirements.md) and [threat-model.md](./threat-model.md) from [learnings.md](./spikes/learnings.md):
 
 > [!NOTE]
 > **Resolved Pre-Implementation Decisions:**
 > - **Docker SDK & Network Isolation:** Decided in [ADR-002](./adr/002-docker-sdk-sandbox.md) (`Accepted`) via [Spike 001](./spikes/001-docker-network-isolation.md) — `github.com/moby/moby/client`, `NetworkMode: "none"` from creation, host-side Git with isolated host `.git/`, abstracted workspace transport, and mandatory forced `ContainerRemove` on timeout.
-> - **Tree-sitter Go Bindings & Go Monolith Packaging:** Decided in [ADR-003](./adr/003-treesitter-and-mcp.md) and [ADR-001](./adr/001-go-control-plane.md) (`Accepted`) via [Spike 002](./spikes/002-treesitter-go-bindings.md) — pure-Go `gotreesitter` (`CGO_ENABLED=0` runtime builds) behind an `ASTIndexer` interface enforcing pre-parse per-file size caps and worker concurrency limits alongside cooperative `SetTimeoutMicros` / `SetMemoryBudgetBytes` guardrails and Repo Map token-budget scoping (with MCP JSON-RPC tool contracts to be validated in [Spike 003](./spikes/003-ollama-tool-calling.md) / Phase 2).
+> - **Tree-sitter Go Bindings, Go Monolith Packaging & MCP Tool Guardrails:** Decided in [ADR-003](./adr/003-treesitter-and-mcp.md) and [ADR-001](./adr/001-go-control-plane.md) (`Accepted`) via [Spike 002](./spikes/002-treesitter-go-bindings.md) and [Spike 003](./spikes/003-ollama-tool-calling.md) — pure-Go `gotreesitter` (`CGO_ENABLED=0` runtime builds) behind `ASTIndexer` enforcing pre-parse per-file size caps and worker concurrency limits, Repo Map token-budget scoping, `search_replace` applied in the sandbox workspace before post-test host diff extraction, and deterministic MCP JSON-RPC validation (`256 KiB` cap, `.github/` read-only vs. write-blocked split, diff-header + Git mode `120000` checks, and per-segment `os.Lstat` + `os.Readlink` + `EvalSymlinks` containment).
+> - **LLM Provider Abstraction & Local Runtime Boundaries:** Decided in [ADR-004](./adr/004-llm-provider-abstraction.md) (`Accepted`) via [Spike 003](./spikes/003-ollama-tool-calling.md) — unified `LLMClient` interface over cloud `v1/chat/completions` (design-adopted pending Phase 4 benchmarks) and Ollama `/api/chat` (`options.num_ctx`), with pre-request token-estimate vs. `prompt_eval_count` truncation auditing, multi-stage `content` JSON fallback + control-char sanitizer, single-tool-per-turn / non-oracle 1-turn prompt-repair retry, and localized single-file scoping for local `7B`/`14B` models.
 > - **GitHub App Installation Token Caching:** Decided in [ADR-005](./adr/005-github-app-token-manager.md) (`Accepted`) — minting and refreshing 1-hour Installation Access Tokens uses a per-worker in-memory `TokenManager` with `singleflight` deduplication (validated directly via Phase 1 `go test -race` unit tests rather than a disposable spike).
 
 ---
