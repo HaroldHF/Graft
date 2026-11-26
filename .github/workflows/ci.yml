@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    name: Go Build, Lint & Race Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check gofmt formatting
+        run: |
+          unformatted="$(git ls-files '*.go' | xargs -r gofmt -l)"
+          if [ -n "${unformatted}" ]; then
+            echo "Unformatted Go files detected:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+      - name: Verify static CGO_ENABLED=0 build & size budget (NFR-10)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p bin
+          go build -trimpath -o bin/ ./cmd/...
+          max_bytes=$((35 * 1024 * 1024))
+          for bin_path in bin/graft-api bin/graft-worker; do
+            size_bytes="$(stat -c%s "${bin_path}")"
+            echo "${bin_path}: ${size_bytes} bytes (max ${max_bytes} bytes)"
+            if [ "${size_bytes}" -gt "${max_bytes}" ]; then
+              echo "Error: ${bin_path} exceeds NFR-10 35 MiB budget" >&2
+              exit 1
+            fi
+          done
+
+      - name: Run unit tests with race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -short -race -v ./...
+
+  secrets:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    container:
+      image: ghcr.io/gitleaks/gitleaks:latest
+    steps:
+      - name: Checkout full git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks detect
+        run: gitleaks detect --no-banner --source .

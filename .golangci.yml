@@ -1,0 +1,38 @@
+version: "2"
+
+run:
+  timeout: 3m
+  allow-parallel-runners: true
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      - ^tmp/
+      - ^web/
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - sqlclosecheck
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      check-type-assertions: true
+    errorlint:
+      errorf: true
+    misspell:
+      locale: US
+  exclusions:
+    paths:
+      - ^tmp/
+      - ^web/

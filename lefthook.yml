@@ -1,16 +1,37 @@
 # Lefthook configuration for Graft
-# Install locally after `git init`: lefthook install
-# Current phase: Phase 0 (Docs & Technical Spikes) — lightweight secret & commit checks only.
+# Install locally: lefthook install
 
 pre-commit:
-  parallel: true
-  fail_fast: false
+  piped: true
   skip:
     - merge
     - rebase
   commands:
     gitleaks:
+      priority: 1
       run: gitleaks protect --staged --redact --no-banner
+
+    gofmt:
+      priority: 2
+      glob: "*.go"
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+
+    golangci-lint:
+      priority: 3
+      glob: "*.go"
+      run: golangci-lint run ./cmd/... ./internal/...
+
+    # Uncomment when sqlc.yaml and SQL migrations are added in Phase 1:
+    # sqlc-vet:
+    #   glob: "{*.sql,sqlc.yaml}"
+    #   run: sqlc vet
+
+    # Uncomment when React + TypeScript dashboard in web/ is added in Phase 3:
+    # web-biome:
+    #   root: "web/"
+    #   glob: "*.{ts,tsx,js,jsx,json,css}"
+    #   run: npx biome check --staged {staged_files}
 
 commit-msg:
   skip:
@@ -21,39 +42,17 @@ commit-msg:
       run: >-
         head -n1 '{1}' | tr -d '\r' | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|spike)(\([a-z0-9._/-]+\))?!?: .*[^[:space:]].*' || (echo 'Error: commit message must follow Conventional Commits: <type>(optional-scope): <description>' >&2 && echo 'Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, spike' >&2 && exit 1)
 
-# ---------------------------------------------------------------------------
-# Phase 1 (Go Control Plane & Workers) — Uncomment once go.mod & code exist
-# ---------------------------------------------------------------------------
-#     gofmt:
-#       glob: "*.go"
-#       run: gofmt -w {staged_files}
-#       stage_fixed: true
-#
-#     golangci-lint:
-#       glob: "*.go"
-#       run: golangci-lint run --new-from-rev=HEAD
-#
-#     sqlc-vet:
-#       glob: "{*.sql,sqlc.yaml}"
-#       run: sqlc vet
+pre-push:
+  parallel: true
+  skip:
+    - merge
+    - rebase
+  commands:
+    go-test:
+      run: >-
+        gcc --version >/dev/null 2>&1 && CGO_ENABLED=1 go test -short -race ./... || go test -short ./...
 
-# ---------------------------------------------------------------------------
-# Phase 3 (React + TypeScript Dashboard in web/) — Uncomment when web/ exists
-# ---------------------------------------------------------------------------
-#     web-biome:
-#       root: "web/"
-#       glob: "*.{ts,tsx,js,jsx,json,css}"
-#       run: npx biome check --staged {staged_files}
-
-# pre-push:
-#   parallel: true
-#   skip:
-#     - merge
-#     - rebase
-#   commands:
-#     go-test:
-#       run: go test -short -race ./...
-#
-#     web-typecheck:
-#       root: "web/"
-#       run: npx tsc --noEmit
+    # Uncomment when React + TypeScript dashboard in web/ is added in Phase 3:
+    # web-typecheck:
+    #   root: "web/"
+    #   run: npx tsc --noEmit

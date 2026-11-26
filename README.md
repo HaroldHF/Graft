@@ -31,6 +31,40 @@ Rather than running LLM-generated code directly on the host or treating agents a
 | LLM Integration | Go `LLMClient` (Cloud `v1/chat/completions` & Ollama `/api/chat`) | Autonomous reasoning and patch generation loop |
 | Real-Time UI | Go SSE Gateway, React + TypeScript + Tailwind | Live console logs, job status, and `git diff` viewer |
 
+## Repository Layout & Package Conventions
+
+Packages under `internal/` are introduced incrementally as each Phase 1–3 issue is implemented (avoiding empty placeholder packages):
+
+```text
+cmd/
+  graft-api/        # Control Plane HTTP API, webhook ingestion & stale-job reaper
+  graft-worker/     # Redis Streams consumer, SandboxManager & Agent loop runner
+internal/
+  buildinfo/        # Compile-time version metadata (-ldflags)
+  config/           # Environment configuration loader & validation (Phase 1)
+  store/            # PostgreSQL schema, migrations & sqlc queries (Phase 1)
+  queue/            # Redis Streams (graft:jobs) & Pub/Sub (graft:telemetry) (Phase 1)
+  githubauth/       # In-memory GitHub App TokenManager w/ singleflight (Phase 1)
+  webhook/          # HMAC-SHA256 verification, deduplication & fork guard (Phase 1)
+  sandbox/          # Docker Engine SDK SandboxManager (NetworkMode: none) (Phase 1)
+  ast/              # Pure-Go gotreesitter ASTIndexer & Repo Map scoper (Phase 2)
+  mcp/              # In-process MCP JSON-RPC tools & path/diff guardrails (Phase 2)
+  llm/              # Dual-transport LLMClient (OpenAI v1 & Ollama /api/chat) (Phase 2)
+  agent/            # Plan, search_replace, test & repair state loop (Phase 2)
+  telemetry/        # Log truncation, secret redaction & SSE gateway (Phase 3)
+web/                # React + TypeScript + Tailwind CSS dashboard (Phase 3)
+docs/               # Architecture RFC, Spikes, ADRs, Requirements & Threat Model
+```
+
+### Local Development Quickstart
+
+```bash
+cp .env.example .env
+docker compose up -d
+CGO_ENABLED=0 go build ./cmd/...
+go test -short ./...
+```
+
 ## Documentation Map
 
 Start with the [Documentation Hub](./docs/README.md) for the full pre-implementation workflow, or jump directly to a specific artifact:
