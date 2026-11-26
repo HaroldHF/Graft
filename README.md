@@ -2,7 +2,7 @@
 
 > **AI Agent Orchestrator for GitHub in Isolated Docker Sandboxes**
 
-**Status:** Pre-implementation (Architecture & Technical Spikes Phase)
+**Status:** Phase 0 Complete — Architecture, Spikes `001`–`003`, ADRs `001`–`005`, Threat Model & Requirements Frozen (Ready for Phase 1 Implementation)
 
 ## Overview
 
@@ -38,18 +38,18 @@ Start with the [Documentation Hub](./docs/README.md) for the full pre-implementa
 | Document | Purpose | Status |
 | :--- | :--- | :--- |
 | [Documentation Hub](./docs/README.md) | Engineering workflow, index of all docs, and maintenance rules | Active |
-| [Architecture RFC-001](./docs/architecture.md) | Problem statement, scope, high-level topology, state machine, sequence diagram, and spike inputs | `Draft (In Research)` |
+| [Architecture RFC-001](./docs/architecture.md) | Problem statement, scope, high-level topology, state machine, sequence diagram, and spike inputs | `Accepted (Phase 0 Baseline)` |
 | [Technical Spikes](./docs/spikes/README.md) | Timeboxed PoCs to de-risk open design questions before coding | `3 Completed, 0 Pending` |
 | [Spike Learnings](./docs/spikes/learnings.md) | Consolidated empirical findings and platform notes across spikes | `Completed (3/3 Spikes Completed)` |
 | [Architecture Decision Records (ADRs)](./docs/adr/README.md) | Key technical choices and trade-offs | `5 Accepted, 0 Proposed` |
-| [Requirements](./docs/requirements.md) | Functional and non-functional requirements (frozen post-spikes) | `Template (Pending Evidence)` |
-| [Threat Model](./docs/threat-model.md) | Trust boundaries, attack vectors, guardrails, and test verification | `Template (Pending Evidence)` |
+| [Requirements](./docs/requirements.md) | Functional and non-functional requirements (frozen post-spikes) | `Frozen (Phase 0 Baseline)` |
+| [Threat Model](./docs/threat-model.md) | Trust boundaries, attack vectors, guardrails, and test verification | `Accepted (Phase 0 Verified)` |
 | [Benchmarks](./docs/benchmarks.md) | Mini SWE-bench metrics, harness setup, and local vs. cloud comparison | `Template (Pending Evidence)` |
 
 ## High-Level Roadmap
 
-1. **Phase 0 — Architecture & Technical Spikes (Current):** [Spikes 001–003](./docs/spikes/README.md) and ADRs `001`–`005` completed; next: resolve open security items in the [Threat Model](./docs/threat-model.md) and freeze [Requirements](./docs/requirements.md) from [learnings.md](./docs/spikes/learnings.md).
-2. **Phase 1 — Control Plane & Sandbox Core:** Implement GitHub webhook ingestion, PostgreSQL schema (`sqlc`), Redis Streams worker loop, reaper crash recovery, and the Go `SandboxManager`.
+1. **Phase 0 — Architecture & Technical Spikes (Completed):** [Spikes 001–003](./docs/spikes/README.md), [Spike Learnings](./docs/spikes/learnings.md), [ADRs 001–005](./docs/adr/README.md), [Threat Model](./docs/threat-model.md), and [Requirements](./docs/requirements.md) frozen.
+2. **Phase 1 — Control Plane & Sandbox Core (Next):** Implement GitHub webhook ingestion, PostgreSQL schema (`sqlc`), Redis Streams worker loop, reaper crash recovery, and the Go `SandboxManager`.
 3. **Phase 2 — Agent Runtime, Tree-sitter & MCP:** Build the AST repository indexer, MCP tool server/client, diff validator guardrails, and unified `LLMClient` agent loop (Cloud `v1/chat/completions` & Ollama `/api/chat`).
 4. **Phase 3 — SSE Telemetry & Dashboard:** Add Redis Pub/Sub log streaming, SSE gateway, and the React/Tailwind live job & diff UI.
 5. **Phase 4 — Mini SWE-bench Evaluation:** Run controlled evaluations across local Ollama and cloud models and record findings in [Benchmarks](./docs/benchmarks.md).
