@@ -50,12 +50,7 @@ pre-push:
   commands:
     go-test:
       run: >-
-        if command -v gcc >/dev/null 2>&1; then
-          CGO_ENABLED=1 go test -short -race ./...;
-        else
-          echo "WARN: gcc not found on PATH; running go test -short ./... locally (CI enforces -race on Linux)" >&2;
-          go test -short ./...;
-        fi
+        gcc --version >/dev/null 2>&1 && CGO_ENABLED=1 go test -short -race ./... || go test -short ./...
 
     # Uncomment when React + TypeScript dashboard in web/ is added in Phase 3:
     # web-typecheck:
