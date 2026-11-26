@@ -3,9 +3,9 @@
 | Field | Value |
 | :--- | :--- |
 | **System** | Graft — AI Agent Orchestrator for GitHub in Isolated Sandboxes |
-| **Status** | `Draft (In Research)` |
-| **Author** | `<Author / GitHub Handle>` |
-| **Date** | `2026-11-21` |
+| **Status** | `Accepted (Phase 0 Baseline)` |
+| **Author** | `HaroldHF` |
+| **Date** | `2026-11-25` |
 
 ---
 
@@ -110,7 +110,10 @@ stateDiagram-v2
     ANALYZING --> FAILED: AST parse error or LLM unreachable
 
     QUEUED --> TIMEOUT: Max queue wait time exceeded
-    PATCHING --> TIMEOUT: Max execution time exceeded
+    PROVISIONING --> TIMEOUT: Stale worker heartbeat or max job duration exceeded
+    ANALYZING --> TIMEOUT: Stale worker heartbeat or max job duration exceeded
+    PATCHING --> TIMEOUT: Stale worker heartbeat or max job duration exceeded
+    TESTING --> TIMEOUT: Stale worker heartbeat or max job duration exceeded
 
     PR_OPENED --> [*]
     FAILED --> [*]
@@ -119,9 +122,9 @@ stateDiagram-v2
 
 ### Transition and Recovery Rules
 
-- **Idempotency:** If a webhook arrives with an `X-GitHub-Delivery` key that has already been processed or is currently running, the system ignores the duplicate request.
-- **Worker Crash Recovery:** If a worker disconnects without updating state, a background **reaper** process detects jobs stuck in `PROVISIONING` or `PATCHING` for more than **10 minutes**, destroys orphaned containers by UUID, and re-enqueues the task.
-- **Retry Limit:** The `TESTING -> PATCHING` transition allows at most `N = 5` iterations. Once exceeded, the job transitions to `FAILED`.
+- **Idempotency & Trigger Authorization:** If a webhook arrives with an `X-GitHub-Delivery` UUID that has already been processed or is currently running, the system ignores the duplicate request. Failed `workflow_run` events originating from external forks (`head_repository.id != base_repository.id`) are rejected before job creation.
+- **Worker Heartbeat, Reaper & Job Timeout:** Active workers update `last_heartbeat_at` periodically (`~30s`). If a worker crashes or disconnects, a background **reaper** detects jobs in any non-terminal execution state (`PROVISIONING`, `ANALYZING`, `PATCHING`, `TESTING`) whose heartbeat is stale (`> 2 minutes`), force-removes orphaned containers by UUID, and either re-enqueues the job (`attempt_count <= 2`) or transitions it to `TIMEOUT`. Separately, each job enforces a configurable wall-clock `max_job_timeout` (`10 minutes` default for cloud providers; `20 minutes` default for local Ollama `14B`).
+- **Retry Limit:** The `TESTING -> PATCHING` transition allows at most `N = 5` iterations (`N = 3` default for local `14B` runs); once exceeded, the job transitions to `FAILED`.
 
 ---
 
@@ -176,7 +179,7 @@ sequenceDiagram
         W->>GH: Git push branch from host & open PR
         W->>DB: Update state (PR_OPENED)
     else Tests Failed / Max Iterations Exceeded
-        W->>GH: Post comment with failure diagnostics
+        W->>GH: Post redacted & truncated failure diagnostics
         W->>DB: Update state (FAILED)
     end
 
@@ -190,7 +193,7 @@ sequenceDiagram
 
 ## 6. Open Questions and Uncertainties (Spike Inputs)
 
-All planned Phase 0 technical spikes (`001`–`003`) are complete; remaining pre-implementation gate work tracks populating [requirements.md](./requirements.md) and [threat-model.md](./threat-model.md) from [learnings.md](./spikes/learnings.md):
+All Phase 0 technical spikes (`001`–`003`) are complete, core ADRs (`001`–`005`) are **Accepted**, [threat-model.md](./threat-model.md) is **Accepted (Phase 0 Verified)**, and [requirements.md](./requirements.md) is **Frozen (Phase 0 Baseline)** from [learnings.md](./spikes/learnings.md):
 
 > [!NOTE]
 > **Resolved Pre-Implementation Decisions:**

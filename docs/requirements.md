@@ -1,53 +1,79 @@
-# Requirements Specification
+# System Requirements Specification (SRS)
 
-| Field | Value |
-| :--- | :--- |
-| **Status** | `Template (Pending Spikes)` |
-| **Date** | `2026-11-21` |
-| **Source Architecture** | [RFC-001: Graft Architecture](./architecture.md) |
-| **Blocking Spikes** | [Technical Spikes Log](./spikes/README.md) |
+**Status:** Frozen (Phase 0 Baseline)
+**Date:** 2026-11-25
 
 > [!NOTE]
-> This document is intentionally kept as a template until [Spikes 001–003](./spikes/README.md) and prototype tests produce empirical evidence. Add requirements here only after validating feasibility, timeouts, and security boundaries.
+> All quantitative performance targets, resource budgets, and operational constraints in this specification are derived directly from empirical measurements in [Spike 001](./spikes/001-docker-network-isolation.md), [Spike 002](./spikes/002-treesitter-go-bindings.md), and [Spike 003](./spikes/003-ollama-tool-calling.md) (consolidated in [Spike Learnings](./spikes/learnings.md)) and architectural decisions [ADR-001](./adr/001-go-control-plane.md) through [ADR-005](./adr/005-github-app-token-manager.md).
 
 ---
 
 ## 1. Scope
 
-### In-Scope
+### 1.1 In-Scope (`v1.0` Baseline)
 
-- `[TBD — Confirm scope items validated from RFC-001]`
+- **GitHub Webhook Ingestion & Job Queueing ([ADR-001](./adr/001-go-control-plane.md)):** Go HTTP Control Plane (`chi`) verifying `HMAC-SHA256` signatures (`X-Hub-Signature-256`), deduplicating deliveries via `X-GitHub-Delivery` in PostgreSQL (`sqlc` + `pgx`), and publishing jobs (`graft-fix` issue labels and `workflow_run` CI failures) to Redis Streams (`graft:jobs`).
+- **In-Memory GitHub App Token Management ([ADR-005](./adr/005-github-app-token-manager.md)):** Per-worker `TokenManager` exchanging RS256 App JWTs (`iat` backdated `~60s`) for short-lived (`1-hour`) Installation Access Tokens with `singleflight` deduplication, proactive refresh at `< 5m` remaining TTL, and single `401 Unauthorized` invalidation retry.
+- **Ephemeral Docker Sandbox Runtime ([ADR-002](./adr/002-docker-sdk-sandbox.md)):** Direct Go Docker Engine SDK (`github.com/moby/moby/client`) managing containers with `NetworkMode: "none"`, cgroups v2 limits (`1 vCPU`, `1 GiB RAM`, `PidsLimit: 256`), host-side Git isolation (`.git/` excluded from sandbox), and abstracted workspace transport (native Linux bind-mount vs. buffered `CopyToContainer` TAR streaming on Windows/WSL2).
+- **Pure-Go AST Repository Map ([ADR-003](./adr/003-treesitter-and-mcp.md)):** Worker-host `ASTIndexer` backed by pure-Go `github.com/odvcencio/gotreesitter` (`CGO_ENABLED=0`) extracting structural symbol graphs (`Go`, `TypeScript`/`TSX`, `Python`) with pre-parse per-file byte limits (`512 KiB`–`1 MiB`), bounded worker concurrency, and token-budget scoping (`~2,000`–`4,000` tokens).
+- **MCP Tool Loop & Deterministic Patch Synthesis ([ADR-003](./adr/003-treesitter-and-mcp.md), [ADR-004](./adr/004-llm-provider-abstraction.md)):** In-process MCP JSON-RPC tool dispatcher (`read_file`, `list_symbols`, `search_replace`) with deterministic host path/size validation (`ValidateMCPToolCall`), dual-transport `LLMClient` (cloud `v1/chat/completions` + native Ollama `/api/chat` with `options.num_ctx`), `content` JSON fallback parser with string-literal `\t`/`\n` sanitization, deterministic `git diff` + `git apply --check` validation, and sandbox unit-test execution before Pull Request creation.
+- **Real-Time Telemetry & Evaluation ([ADR-001](./adr/001-go-control-plane.md)):** Redis Pub/Sub (`graft:telemetry`) streamed through a Go SSE Gateway to a React + TypeScript + Tailwind CSS dashboard, plus a reproducible 10-task mini SWE-bench evaluation harness ([Benchmarks](./benchmarks.md)).
 
-### Out-of-Scope
+### 1.2 Out-of-Scope (`v1.0` Baseline)
 
-- `[TBD — Confirm explicit exclusions]`
-
----
-
-## 2. Functional Requirements (FR)
-
-| ID | Subsystem | Requirement | Acceptance Criteria | Evidence / Spike |
-| :--- | :--- | :--- | :--- | :--- |
-| `FR-01` | `[Component]` | `[Expected behavior]` | `[Testable condition]` | `[Spike / ADR]` |
-
----
-
-## 3. Non-Functional Requirements (NFR)
-
-| ID | Category | Measurable Target | Verification Method | Evidence / Spike |
-| :--- | :--- | :--- | :--- | :--- |
-| `NFR-01` | `[Security / Latency / Limits / Build]` | `[Measured threshold]` | `[Test / Benchmark]` | `[Spike / ADR]` |
+- Multi-cluster Kubernetes scheduling or custom Firecracker microVM orchestration ([ADR-002](./adr/002-docker-sdk-sandbox.md)).
+- Custom LLM fine-tuning or RLHF pipelines.
+- Real-time multi-user collaborative code editing in the web dashboard.
+- Separate Python/LangChain sidecar services ([ADR-001](./adr/001-go-control-plane.md)).
+- In-repository `.graft.yml` execution policy manifest (deferred to post-MVP `v1.1`/`v1.2`; `v1.0` stores per-repository execution profiles—`sandbox_image`, `test_cmd`, optional `:ro` dependency-cache preparer settings, and `max_job_timeout`—in the Control Plane PostgreSQL database).
 
 ---
 
-## 4. Constraints & Assumptions
+## 2. Functional Requirements
 
-- `[Constraint or runtime assumption verified during spikes]`
+| ID | Component | Requirement | Verification Method |
+| :--- | :--- | :--- | :--- |
+| **FR-01** | **Webhook Ingestion, Deduplication & Trigger Guard** | The Control Plane MUST validate `X-Hub-Signature-256` (`HMAC-SHA256`) using constant-time comparison, persist the delivery UUID (`X-GitHub-Delivery`) with a PostgreSQL `UNIQUE` constraint to reject duplicate deliveries idempotently, reject `workflow_run` events originating from external forks (`head_repository.id != base_repository.id`), and enqueue accepted jobs (`issues.labeled` with `graft-fix` or same-repo failed `workflow_run`) to Redis Stream `graft:jobs`. | Phase 1 unit & integration tests (`TestWebhookHMACVerification`, `TestWebhookDeliveryDeduplication`, `TestWebhookForkWorkflowRejected`). |
+| **FR-02** | **Transactional Job State Machine, Heartbeat Reaper & Timeout** | Workers MUST consume jobs via Redis Consumer Groups (`XREADGROUP`), persist every state transition (`QUEUED` → `PROVISIONING` → `ANALYZING` → `PATCHING` → `TESTING` → `PR_OPENED` / `FAILED` / `TIMEOUT`) atomically in PostgreSQL (`sqlc` + `pgx`), and renew `last_heartbeat_at` every `~30s`. A background Control Plane reaper MUST detect jobs in active execution states (`PROVISIONING`, `ANALYZING`, `PATCHING`, `TESTING`) with stale heartbeats (`> 2 minutes`), force-remove orphaned containers by UUID, and re-enqueue up to `attempt_count <= 2` before transitioning to `TIMEOUT`. Separately, jobs exceeding configurable `max_job_timeout` (`10m` cloud default; `20m` local Ollama `14B` default) MUST transition to `TIMEOUT`. | Phase 1 state-machine unit tests and integration reaper test (`TestStaleJobReaper`). |
+| **FR-03** | **GitHub App `TokenManager`** | Workers MUST obtain GitHub Installation Access Tokens on demand via an in-memory `TokenManager` ([ADR-005](./adr/005-github-app-token-manager.md)) using `singleflight` per `installation_id`, `~60s` JWT `iat` backdating, proactive refresh when remaining TTL `< 5 minutes`, and single cache invalidation + retry on `401 Unauthorized`. Raw tokens MUST NEVER be stored in Redis, PostgreSQL, `.git/config`, or container environment variables. | Phase 1 concurrency test (`go test -race`: `20` goroutines across `3` installation IDs). |
+| **FR-04** | **Host Git Clone & Isolated Workspace Transport** | Workers MUST execute `git clone` and `git push` on the Worker Host using hardened flags (`-c core.autocrlf=false -c core.hooksPath=/dev/null -c core.fsmonitor=false -c submodule.recurse=false`). The host `.git/` directory MUST NEVER be exposed writable inside the sandbox. Workspace transport MUST support native Linux bind-mounts (keeping host `.git/` outside the sandbox mount and matching `Config.User` `uid:gid`) and buffered `CopyToContainer` (`256 KiB` buffer, excluding host `.git/`) on Windows/WSL2 ([ADR-002](./adr/002-docker-sdk-sandbox.md)). | Validated in [Spike 001](./spikes/001-docker-network-isolation.md); Phase 1 `SandboxManager` unit/integration tests. |
+| **FR-05** | **Network-Isolated Ephemeral Container Lifecycle** | `SandboxManager` MUST create containers via `github.com/moby/moby/client` using the repository's configured `sandbox_image` with `HostConfig.NetworkMode = "none"`, `NanoCPUs = 1_000_000_000`, `Memory = 1 << 30`, and `PidsLimit = 256` (plus optional `:ro` dependency-cache mounts populated by a separate credential-less preparer container when offline package caches are required). On task completion, cancellation, or `context.WithTimeout` expiration, the worker MUST execute `ContainerRemove(Force: true, RemoveVolumes: true)` on an independent cleanup context because context cancellation on `ExecAttach` does not kill the container process ([Spike 001](./spikes/001-docker-network-isolation.md)). | Validated in [Spike 001](./spikes/001-docker-network-isolation.md) (`36/36` network block, `0` orphan containers); Phase 1 integration tests. |
+| **FR-06** | **Worker-Host Pure-Go AST Repo Map (`ASTIndexer`)** | Before starting the LLM loop, the worker MUST index target repository symbols (`Go`, `TypeScript`/`TSX`, `Python`) on the Worker Host using `github.com/odvcencio/gotreesitter` behind the `ASTIndexer` interface ([ADR-003](./adr/003-treesitter-and-mcp.md)). The indexer MUST enforce a pre-parse per-file size cap (`512 KiB`–`1 MiB`), bounded worker concurrency, secondary `SetTimeoutMicros` + `SetMemoryBudgetBytes` (`ParseStrict`), `tree.RootNode() == nil` verification, and pre-`Release()` string extraction, and MUST rank/prune the resulting Repo Map to fit a `~2,000`–`4,000` token budget. | Validated in [Spike 002](./spikes/002-treesitter-go-bindings.md) (`2,899/2,899` symbol parity with CGO, `< 1.4s` on `1,042` files) and [Spike 003](./spikes/003-ollama-tool-calling.md) (`~2.3k`-token scoped Repo Map vs. `37.2k`–`62.5k`-token full maps). |
+| **FR-07** | **MCP Tool Server & Deterministic Security Guardrails** | The worker MUST expose `read_file`, `list_symbols`, and `search_replace` over an in-process MCP JSON-RPC dispatcher ([ADR-003](./adr/003-treesitter-and-mcp.md)). Every tool call MUST pass `ValidateMCPToolCall` / `ValidateToolPath` before execution: enforcing a `256 KiB` (`262,144 B`) raw payload and file size cap, workspace containment via `filepath.Clean` + per-segment `os.Lstat`/`os.Readlink` + `filepath.EvalSymlinks` (blocking symlinks and Windows NTFS junctions), read-only `.github/` access (`isWrite=false` allowed for CI diagnosis; `isWrite=true` blocked), and unconditional blocks on `.git/`, `.env*` (except `.env.example`/`.sample`/`.template`), and `*.pem`/`*.key`/`*.crt`. | Validated in [Spike 003](./spikes/003-ollama-tool-calling.md) (`25/25` unit tests in `1.083s` + `8/8` live prompt-injection blocks). |
+| **FR-08** | **Unified `search_replace` Edit Contract & Non-Oracle Repair Loop** | In `v1.0`, models (both local and cloud) MUST edit existing files via `search_replace(path, search, replace)` rather than raw LLM-authored unified diffs (`apply_patch` scored `0/10` validity on local models in [Spike 003](./spikes/003-ollama-tool-calling.md)). The dispatcher MUST require that `path` was read via `read_file(path)` earlier in the session, verify `strings.Count(fileContent, search) == 1`, apply the replacement in the sandbox workspace, and synthesize the unified diff via `git diff` + `git apply --check`. If `search` is not found or ambiguous, the dispatcher MUST return non-oracle repair feedback instructing the model to call `read_file(path)` or quoting actual lines around the closest match in `path` (up to `3` match-repair retries; `TESTING → PATCHING` loop bounded to `N = 5` iterations for cloud and `N = 3` for local `14B`). File creation (if required) MUST use an explicit `create_file` tool or empty-`search` contract for non-existent validated paths. | Validated in [Spike 003](./spikes/003-ollama-tool-calling.md) (`5/5` `100%` `git apply --check` on `14B` `search_replace` vs. `0/10` on `apply_patch`); Phase 2 unit tests. |
+| **FR-09** | **Dual-Transport `LLMClient` & Silent-Truncation Audit** | `LLMClient` ([ADR-004](./adr/004-llm-provider-abstraction.md)) MUST support OpenAI-compatible `v1/chat/completions` for cloud APIs and Ollama's native `/api/chat` endpoint (passing explicit `options.num_ctx`) for local models. The client MUST: (1) audit returned `prompt_eval_count` against pre-request estimated input tokens (`bytes/4` + tokenizer margin) and verify active `/api/ps` `context_length` (or `OLLAMA_NUM_PARALLEL=1`) to detect silent context truncation, (2) parse tool calls from `message.tool_calls` with automatic fallback to `message.content` JSON extraction + string-literal `\t`/`\n` sanitization, and (3) enforce single-tool-call-per-turn prompting with 1-turn JSON parse repair that preserves the current state phase (discovery vs. edit). | Validated in [Spike 003](./spikes/003-ollama-tool-calling.md) (`36/36` `100%` usable JSON turns on `14B` with fallback + sanitizer vs. `0/64` native `tool_calls`). |
+| **FR-10** | **Post-Test Diff Re-Validation, Log Redaction & PR Opening** | After a `search_replace` edit passes `git apply --check`, the worker MUST execute the repository's configured `test_cmd` inside the `NetworkMode: "none"` sandbox and truncate + redact common credential patterns (`ghp_`, `ghs_`, `github_pat_`, `sk-`, PEM blocks) before streaming logs to `graft:telemetry` or posting GitHub failure comments. Only when unit tests exit `0` may the worker extract the final unified diff (capped at `≤ 1 MiB`), re-validate all `--- a/` and `+++ b/` headers against `ValidateToolPath(path, true)`, reject any patch containing Git symlink mode `120000`, apply the verified patch to the clean host clone, push a feature branch, and open a GitHub Pull Request. | Validated in [Spike 001](./spikes/001-docker-network-isolation.md) and [Spike 003](./spikes/003-ollama-tool-calling.md); Phase 2 end-to-end integration & log-redaction tests. |
+
+---
+
+## 3. Non-Functional Requirements (Empirically Grounded)
+
+| ID | Category | Target Threshold (`v1.0` SLA / Budget) | Empirical Spike Baseline & Traceability |
+| :--- | :--- | :--- | :--- |
+| **NFR-01** | **Sandbox Container Startup Latency** | **≤ 200 ms P95** (`ContainerCreate + ContainerStart` on pre-pulled `sandbox_image`) | **[Spike 001](./spikes/001-docker-network-isolation.md):** Measured `127ms`–`147ms` median and `147ms`–`163ms` P95 across `NetworkMode: "none"` suites on cached `alpine:3.21` (`Docker Engine 29.9.3`). |
+| **NFR-02** | **Sandbox Forced Teardown Latency** | **≤ 250 ms P95** (`ContainerRemove(Force: true, RemoveVolumes: true)`) with **`0` orphan containers** | **[Spike 001](./spikes/001-docker-network-isolation.md):** Measured `68ms`–`163ms` median and `93ms`–`170ms` P95 on normal teardown, and `49ms` (`n=1`) tearing down an active timed-out container (`sleep 60`), leaving `0` orphans. |
+| **NFR-03** | **Sandbox Lifecycle Overhead & Workspace I/O** | **≤ 450 ms P95** container lifecycle overhead (`Create + Start + Exec + Remove`, excluding repo transfer/test runtime); native Linux `ext4` host workspace in production | **[Spike 001](./spikes/001-docker-network-isolation.md):** `NetworkMode: "none"` total lifecycle measured `347ms` med / `379ms` P95 (vs. `458ms` / `476ms` for `NetworkDisconnect`). Native Linux `ext4` full-tree read (`1,410` files, `22.9 MB`) took `257ms`–`260ms` vs. `22.44s` over Windows↔WSL2 NTFS bind-mounts (`~87x` slower) and `12.48s` med / `12.79s` P95 via Windows `CopyToContainer`. |
+| **NFR-04** | **Sandbox Cgroup & Diff Output Limits** | Hard limits per container: **`1 vCPU`** (`NanoCPUs: 1_000_000_000`), **`1 GiB RAM`** (`Memory: 1,073,741,824 B`), **`PidsLimit: 256`**, **`NetworkMode: "none"`**, and **≤ 1 MiB** extracted diff cap | **[Spike 001](./spikes/001-docker-network-isolation.md):** Verified inside container cgroups v2 (`/sys/fs/cgroup/cpu.max = 100000 100000`, `memory.max = 1073741824`, `pids.max = 256`). |
+| **NFR-05** | **AST Repository Map Indexing Latency & Memory** | **≤ 2,000 ms median** indexing wall time and **≤ 128 MiB peak `VmHWM`** for repositories up to `1,000` source files under `1 vCPU / 1 GiB RAM` | **[Spike 002](./spikes/002-treesitter-go-bindings.md):** Pure-Go `gotreesitter v0.58.0` under `1 vCPU / 1 GiB` Linux container measured `81.03ms` med / `30.31 MiB` `VmHWM` (`40` `.py` files), `942.71ms` med / `74.84 MiB` `VmHWM` (`476` mixed files), and `1,393.79ms` med (`1,416.42ms` max) / `69.69 MiB` `VmHWM` (`1,042` TS/TSX files). |
+| **NFR-06** | **AST Pre-Parse File Cap & Repo Map Token Budget** | Pre-parse per-file byte limit: **`512 KiB`–`1 MiB`** (hard skip before `parser.Parse`); secondary `ParseStrict` timeout (`50ms`–`100ms`/file) & arena budget (`32 MiB`–`64 MiB`); scoped Repo Map prompt payload: **`2,000`–`4,000` tokens** (`≤ 6,000` tokens max) | **[Spike 002](./spikes/002-treesitter-go-bindings.md) & [Spike 003](./spikes/003-ollama-tool-calling.md):** Unfiltered full Repo Maps reached `37,244` tokens (`Brinco`) and `62,537` tokens (`Celulares_Alex_Frontend`); `minified_2mb.ts` (`2.85 MiB`) allocated `165`–`171 MiB` `HeapInuse` in `22.44ms` before parser timeout checks. Scoping to a `~2.3k`-token Repo Map (`~3.2k`–`3.56k` total prompt tokens) fit cleanly inside an `8k` context window. |
+| **NFR-07** | **MCP Tool Validation Latency & Payload Cap** | **`256 KiB` (`262,144 B`)** maximum raw JSON tool-argument envelope and target `read_file` byte size; deterministic guardrail rejection latency **≤ 5 ms** | **[Spike 003](./spikes/003-ollama-tool-calling.md):** `ValidateMCPToolCall` rejected a `1.0 MiB` target file in `2,701 µs` (`2.70ms`) and a `257 KiB` MCP JSON argument payload in `525 µs` (`0.53ms`). |
+| **NFR-08** | **Local Ollama Context Window, VRAM & Timeout Budgets** | Explicit `options.num_ctx` **`8,192`** (default) or **`16,384`** (max on `8 GiB` VRAM); total active prompt **≤ 6,000 tokens**; per-turn HTTP `context.WithTimeout` **≥ 45 s (`7B`) / ≥ 90 s (`14B`)**; overall `max_job_timeout` **10m (cloud) / 20m (local `14B`)**; HTTP cancellation propagation **≤ 500 ms** | **[Spike 003](./spikes/003-ollama-tool-calling.md) (`RTX 4060 Laptop 8.0 GiB VRAM`, `Ollama v0.40.18`):** At `8k` context, `7B` (`4.80 GiB`, `29/29` GPU layers) ran at `43.2ms` KV-cached / `1,420.5ms` cold prefill, `50.0 tok/s` decode, `1,635ms` med / `11,971ms` P95 turn wall (losing retrieval accuracy at `7,312` tokens). `14B` (`5.93 / 10.07 GiB` VRAM/RAM, `29/49` GPU layers) ran at `566.6ms` KV-cached / `4,977.2ms`–`5,242.6ms` cold prefill, `7.8 tok/s` decode (`6.2 tok/s` at `16k`), `9,118ms` med / `32,406ms` P95 turn wall. `250ms` `context.WithTimeout` aborted in `250ms`–`251ms` (`HTTP 499`). |
+| **NFR-09** | **Local vs. Cloud Model Routing Policy** | **`qwen2.5-coder:14b` (`Q4_K_M`)** is the minimum local default for single-file code editing (**`100%` usable JSON**, **`5/5` valid diffs**, **`3/5` test-passing**); **`7B`** (`50.0 tok/s`) is restricted to fast read-only discovery (`6/6`) or CPU/GPU-constrained pre-screening; multi-file refactors or prompts **`> 6,000` tokens** MUST route to a cloud provider | **[Spike 003](./spikes/003-ollama-tool-calling.md):** Across the 16-prompt suite at `num_ctx=8192`, `14B` achieved `36/36` (`100.0%`) usable JSON turns and `5/5` (`100%`) `git apply --check` patches with `search_replace`, whereas `7B` achieved `19/28` (`67.9%`) usable JSON turns and `1/5` (`20%`) valid patches. |
+| **NFR-10** | **Static Binary Compilation & Container Image Footprint** | Production worker and control-plane binaries MUST compile with **`CGO_ENABLED=0`** into a static Linux ELF binary (**≤ 35 MiB** stripped/unstripped binary size; distroless/`FROM scratch` image compatible) | **[Spike 002](./spikes/002-treesitter-go-bindings.md):** `CGO_ENABLED=0` Linux multi-stage build completed in `14.21s`, producing an `18.14 MiB` (`19,020,978 B`) static ELF binary (`27.84 MiB` Docker Engine 29 `containerd` `.Size`, `0` C shared libraries). Note: `go test -race` in CI/local hooks requires `CGO_ENABLED=1` and a compatible C toolchain (`gcc`/MinGW-w64 or Linux/WSL2). |
+
+---
+
+## 4. Operational Constraints & Assumptions
+
+- **Production Host OS vs. Development Host OS:** Production workers MUST run on native Linux hosts (`ext4`/`xfs`) so container workspace I/O operates at native speed (`~257ms`–`260ms` full-tree read). Windows 11 development hosts (`windows/amd64` with WSL2 Docker Desktop) MUST use buffered `CopyToContainer` TAR streaming (`~12.48s` transfer for `1,410` files) to avoid the `~87x` Windows↔WSL2 9P NTFS bind-mount penalty (`22.44s`).
+- **Docker Engine API Compatibility:** Workers target Docker Engine API `v1.45+` (verified on Docker Engine `29.9.3`, API `1.56`) via `github.com/moby/moby/client v0.6.3` and `github.com/moby/moby/api v1.57.0`.
+- **Pre-1.0 Dependency Encapsulation:** Because `github.com/odvcencio/gotreesitter` (`v0.58.0`) is pre-`1.0`, all AST calls MUST stay encapsulated behind the internal `ASTIndexer` Go interface with exact version pinning in `go.mod` ([ADR-003](./adr/003-treesitter-and-mcp.md)).
+- **Ollama Daemon Concurrency Configuration:** Local Ollama deployments MUST either set `OLLAMA_NUM_PARALLEL=1` or inspect `/api/ps` `context_length` so `llama-server` does not subdivide `options.num_ctx` across parallel slots ([Spike 003](./spikes/003-ollama-tool-calling.md)).
 
 ---
 
 ## 5. Freeze Criteria
 
-- [ ] Spikes `001`–`003` completed with recorded findings and consolidated in [spikes/learnings.md](./spikes/learnings.md)
-- [ ] Remaining core ADRs (`001`–`004`) promoted to `Accepted` ([ADR-005](./adr/005-github-app-token-manager.md) already `Accepted`)
-- [ ] Threat model mitigations backed by concrete verification tests
+- [x] [Spike 001](./spikes/001-docker-network-isolation.md), [Spike 002](./spikes/002-treesitter-go-bindings.md), and [Spike 003](./spikes/003-ollama-tool-calling.md) completed and synthesized in [Spike Learnings](./spikes/learnings.md).
+- [x] Core ADRs ([ADR-001](./adr/001-go-control-plane.md), [ADR-002](./adr/002-docker-sdk-sandbox.md), [ADR-003](./adr/003-treesitter-and-mcp.md), [ADR-004](./adr/004-llm-provider-abstraction.md), and [ADR-005](./adr/005-github-app-token-manager.md)) promoted to **Accepted**.
+- [x] [Threat Model](./threat-model.md) populated with verified isolation, authentication, AST memory, and MCP path-guardrail controls.
